@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="autonomous_arena_world">
+
+    <!-- ===== 1. LIGHTING & PHYSICS ===== -->
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000.0</real_time_update_rate>
+    </physics>
+
+    <!-- camera: behind start line, looking along the arena (+Y) -->
+    <gui>
+      <camera name="user_camera">
+        <pose>0 -3.4 2.4 0 0.6 1.5708</pose>
+      </camera>
+    </gui>
+
+    <!-- ===== 2. ARENA: 1.0 m (X) x 3.0 m (Y), wall height 0.2 m ===== -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0.0 1.5 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 0.05 0.2</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.0 0.05 0.2</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0.0 -1.5 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 0.05 0.2</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.0 0.05 0.2</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>0.5 0.0 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.05 3.0 0.2</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.05 3.0 0.2</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-0.5 0.0 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.05 3.0 0.2</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.05 3.0 0.2</size></box></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== 3. START LINE (yellow) & FINISH LINE (green) - visual only ===== -->
+    <model name="start_line">
+      <static>true</static>
+      <pose>0.0 -1.25 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.95 0.04 0.002</size></box></geometry>
+          <material><ambient>1 1 0 1</ambient><diffuse>1 1 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="finish_line">
+      <static>true</static>
+      <pose>0.0 1.25 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.95 0.04 0.002</size></box></geometry>
+          <material><ambient>0 1 0 1</ambient><diffuse>0 1 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

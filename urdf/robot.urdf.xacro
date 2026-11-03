@@ -1,0 +1,310 @@
+<?xml version="1.0"?>
+<robot name="autonomous_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ===== DIMENSIONS (meter) =====
+       base_link = midpoint of the 2 drive wheels (axle). +X = forward.
+       Total size: ~0.20 (L) x 0.20 (W) x 0.10 (H) -> fits 30x30x30 cm -->
+  <xacro:property name="body_len" value="0.12"/>
+  <xacro:property name="body_wid" value="0.10"/>
+  <xacro:property name="body_h"   value="0.06"/>
+  <xacro:property name="body_x"   value="0.03"/>   <!-- body centre ahead of axle -->
+  <xacro:property name="body_z"   value="0.07"/>   <!-- body centre, bottom at 0.04 -->
+  <xacro:property name="wheel_r"  value="0.035"/>
+  <xacro:property name="wheel_w"  value="0.02"/>
+  <xacro:property name="wheel_y"  value="0.06"/>   <!-- wheel centre, inner face touches body -->
+  <xacro:property name="caster_r" value="0.02"/>
+  <xacro:property name="caster_x" value="0.065"/>
+  <xacro:property name="sonar_z"  value="0.085"/>  <!-- sonar height (obstacles are 0.2 m tall) -->
+  <xacro:property name="PI2"      value="1.5707963"/>
+
+  <!-- ===== 0. FOOTPRINT (ground) ===== -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===== 1. BASE (chassis) ===== -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="${body_x} 0 ${body_z}" rpy="0 0 0"/>
+      <geometry><box size="${body_len} ${body_wid} ${body_h}"/></geometry>
+      <material name="blue"><color rgba="0.0 0.0 0.8 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="${body_x} 0 ${body_z}" rpy="0 0 0"/>
+      <geometry><box size="${body_len} ${body_wid} ${body_h}"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="${body_x} 0 ${body_z}" rpy="0 0 0"/>
+      <mass value="1.2"/>
+      <inertia ixx="0.00136" ixy="0.0" ixz="0.0" iyy="0.0018" iyz="0.0" izz="0.00244"/>
+    </inertial>
+  </link>
+
+  <!-- ===== 2. DRIVE WHEELS (N20 motors, rear) ===== -->
+  <xacro:macro name="drive_wheel" params="side y">
+    <link name="${side}_wheel">
+      <visual>
+        <origin xyz="0 0 0" rpy="${PI2} 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_w}"/></geometry>
+        <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${PI2} 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_w}"/></geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="${PI2} 0 0"/>
+        <mass value="0.05"/>
+        <inertia ixx="0.000017" ixy="0.0" ixz="0.0" iyy="0.000017" iyz="0.0" izz="0.000031"/>
+      </inertial>
+    </link>
+    <joint name="${side}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${side}_wheel"/>
+      <origin xyz="0 ${y} ${wheel_r}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:drive_wheel side="left"  y="${wheel_y}"/>
+  <xacro:drive_wheel side="right" y="-${wheel_y}"/>
+
+  <!-- ===== 3. FRONT CASTER (frictionless ball) ===== -->
+  <link name="front_caster">
+    <visual>
+      <geometry><sphere radius="${caster_r}"/></geometry>
+      <material name="grey"><color rgba="0.5 0.5 0.5 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><sphere radius="${caster_r}"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.03"/>
+      <inertia ixx="0.0000048" ixy="0.0" ixz="0.0" iyy="0.0000048" iyz="0.0" izz="0.0000048"/>
+    </inertial>
+  </link>
+  <joint name="front_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_caster"/>
+    <origin xyz="${caster_x} 0.0 ${caster_r}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===== 4. SONAR SENSORS (5 pcs, HC-SR04 like: 2 cm - 2 m, ~30 deg cone) ===== -->
+  <xacro:macro name="sonar" params="name x y yaw">
+    <link name="${name}_link">
+      <visual>
+        <geometry><box size="0.02 0.03 0.02"/></geometry>
+        <material name="yellow"><color rgba="0.8 0.8 0.0 1.0"/></material>
+      </visual>
+      <inertial>
+        <mass value="0.001"/>
+        <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+      </inertial>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="${name}_link"/>
+      <origin xyz="${x} ${y} ${sonar_z}" rpy="0 0 ${yaw}"/>
+    </joint>
+
+    <gazebo reference="${name}_link">
+      <material>Gazebo/Yellow</material>
+      <sensor type="ray" name="${name}_sensor">
+        <pose>0 0 0 0 0 0</pose>
+        <visualize>true</visualize>
+        <update_rate>20</update_rate>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>5</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.26</min_angle>
+              <max_angle>0.26</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.02</min>
+            <max>2.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.005</stddev>
+          </noise>
+        </ray>
+        <plugin name="${name}_plugin" filename="libgazebo_ros_ray_sensor.so">
+          <ros>
+            <namespace>/</namespace>
+            <remapping>~/out:=${name}_range</remapping>
+          </ros>
+          <output_type>sensor_msgs/Range</output_type>
+          <radiation_type>ultrasound</radiation_type>
+          <frame_name>${name}_link</frame_name>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- Front 3 (fl, fc, fr) + Left/Right 2 -->
+  <xacro:sonar name="sonar_fc" x="0.10"  y="0.0"    yaw="0.0"/>
+  <xacro:sonar name="sonar_fl" x="0.095" y="0.035"  yaw="0.45"/>
+  <xacro:sonar name="sonar_fr" x="0.095" y="-0.035" yaw="-0.45"/>
+  <xacro:sonar name="sonar_l"  x="0.06"  y="0.06"   yaw="${PI2}"/>
+  <xacro:sonar name="sonar_r"  x="0.06"  y="-0.06"  yaw="-${PI2}"/>
+
+  <!-- ===== COLOR SENSOR (downward camera, front bottom) =====
+  <link name="color_sensor_link">
+    <visual>
+      <geometry><box size="0.015 0.015 0.008"/></geometry>
+      <material name="orange"><color rgba="1.0 0.5 0.0 1.0"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.001"/>
+      <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+    </inertial>
+  </link>
+  <joint name="color_sensor_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="color_sensor_link"/>
+    <origin xyz="0.10 0 0.03" rpy="0 ${PI2} 0"/>   
+  </joint>
+
+  <gazebo reference="color_sensor_link">
+    <sensor type="camera" name="color_sensor">
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <update_rate>20</update_rate>
+      <camera>
+        <horizontal_fov>1.5</horizontal_fov>
+        <image><width>16</width><height>16</height><format>R8G8B8</format></image>
+        <clip><near>0.005</near><far>0.2</far></clip>
+      </camera>
+      <plugin name="color_sensor_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/</namespace></ros>
+        <camera_name>color_sensor</camera_name>
+        <frame_name>color_sensor_link</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo> -->
+  
+  <!-- new code -->
+  
+    <!-- ===== FRONT CAMERA (top front of the body, looking forward) ===== -->
+  <xacro:property name="cam_len" value="0.02"/>
+  <xacro:property name="cam_wid" value="0.04"/>
+  <xacro:property name="cam_h"   value="0.02"/>
+
+  <link name="front_camera_link">
+    <visual>
+      <geometry><box size="${cam_len} ${cam_wid} ${cam_h}"/></geometry>
+      <material name="cam_black"><color rgba="0.05 0.05 0.05 1.0"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.005"/>
+      <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <!-- fixed to base_link: front edge of the body (flush), sitting on the body top -->
+  <joint name="front_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_camera_link"/>
+    <origin xyz="${body_x + body_len/2 - cam_len/2} 0 ${body_z + body_h/2 + cam_h/2}" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="front_camera_link">
+    <sensor type="camera" name="front_camera_sensor">
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <update_rate>15</update_rate>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>320</width><height>240</height><format>R8G8B8</format></image>
+        <clip><near>0.02</near><far>10.0</far></clip>
+      </camera>
+      <plugin name="front_camera_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/</namespace></ros>
+        <camera_name>front_camera</camera_name>
+        <frame_name>front_camera_link</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+  
+  <!-- ===== IMU (MPU6050-like) ===== -->
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.001"/>
+      <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+    </inertial>
+  </link>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0.07" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="imu_link">
+    <sensor name="mpu6050" type="imu">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+        <ros>
+          <namespace>/</namespace>
+          <remapping>~/out:=imu/data</remapping>
+        </ros>
+      </plugin>
+    </sensor>
+  </gazebo>
+  
+  
+  <!-- ===== 5. GAZEBO DIFF DRIVE (encoder odometry) ===== -->
+  <gazebo>
+    <plugin name="diff_drive_controller" filename="libgazebo_ros_diff_drive.so">
+      <update_rate>50</update_rate>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${2*wheel_y}</wheel_separation>
+      <wheel_diameter>${2*wheel_r}</wheel_diameter>
+      <max_wheel_torque>5</max_wheel_torque>
+      <max_wheel_acceleration>8.0</max_wheel_acceleration>
+      <command_topic>cmd_vel</command_topic>
+      <odometry_topic>odom</odometry_topic>
+      <odometry_source>0</odometry_source>  <!-- 0 = wheel encoders -->
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>false</publish_wheel_tf>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+    </plugin>
+
+    <!-- wheel joint states -> robot_state_publisher draws spinning wheels in RViz -->
+    <plugin name="joint_state_publisher" filename="libgazebo_ros_joint_state_publisher.so">
+      <ros><remapping>~/out:=joint_states</remapping></ros>
+      <update_rate>30</update_rate>
+      <joint_name>left_wheel_joint</joint_name>
+      <joint_name>right_wheel_joint</joint_name>
+    </plugin>
+  </gazebo>
+
+  <!-- ===== GAZEBO COLORS + FRICTION ===== -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+  <gazebo reference="left_wheel">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1><mu2>1.0</mu2>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1><mu2>1.0</mu2>
+  </gazebo>
+  <gazebo reference="front_caster">
+    <material>Gazebo/Grey</material>
+    <mu1>0.0</mu1><mu2>0.0</mu2>   <!-- caster must slide freely -->
+  </gazebo>
+
+</robot>

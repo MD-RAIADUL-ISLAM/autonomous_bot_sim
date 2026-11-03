@@ -1,0 +1,126 @@
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.25
+      Plane Cell Count: 20
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Marker Scale: 0.2
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Name: Trail
+      Enabled: true
+      Color: 0; 255; 0
+      Line Style: Lines
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /trail
+      Value: true
+    - Class: rviz_default_plugins/Range
+      Name: sonar_fc_range
+      Enabled: true
+      Alpha: 0.5
+      Color: 255; 255; 0
+      Buffer Length: 1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sonar_fc_range
+      Value: true
+    - Class: rviz_default_plugins/Range
+      Name: sonar_fl_range
+      Enabled: true
+      Alpha: 0.5
+      Color: 255; 255; 0
+      Buffer Length: 1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sonar_fl_range
+      Value: true
+    - Class: rviz_default_plugins/Range
+      Name: sonar_fr_range
+      Enabled: true
+      Alpha: 0.5
+      Color: 255; 255; 0
+      Buffer Length: 1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sonar_fr_range
+      Value: true
+    - Class: rviz_default_plugins/Range
+      Name: sonar_l_range
+      Enabled: true
+      Alpha: 0.5
+      Color: 255; 255; 0
+      Buffer Length: 1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sonar_l_range
+      Value: true
+    - Class: rviz_default_plugins/Range
+      Name: sonar_r_range
+      Enabled: true
+      Alpha: 0.5
+      Color: 255; 255; 0
+      Buffer Length: 1
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /sonar_r_range
+      Value: true
+  Enabled: true
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 3.0
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.0
+      Pitch: 0.8
+      Yaw: 3.14
+      Name: Current View
+      Target Frame: base_footprint
+      Value: Orbit (rviz_default_plugins)
+Window Geometry:
+  Height: 900
+  Width: 1400
