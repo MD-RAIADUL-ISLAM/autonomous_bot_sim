@@ -1,9 +1,14 @@
 """Navigators for the obstacle course (pure python, no ROS) -> unit-testable.
 
 Pick the algorithm with the LAST line of this file:
+    Navigator = RadarNavigator         # servo sweep + 1 TOF (current hardware)
     Navigator = FirstApproach          # scan-and-go (static sonar scan, turn, drive)
     Navigator = Bug2Navigator          # Bug2 + wall following around obstacles
     Navigator = WallFollowNavigator    # simple wall following around obstacles
+
+Note: RadarNavigator needs the servo+TOF hardware (robot.urdf.xacro);
+all sonar-based navigators below are kept for reference but the sonars
+are gone from the URDF, so RadarNavigator is the active one.
 
 
 Same interface as the scan-and-go Navigator:
@@ -554,10 +559,321 @@ class FirstApproach:
         return 0.0, 0.0
 
 
+class RadarNavigator:
+    """Servo-scanning navigator: one TOF ranging on a sweeping servo head.
+
+    The head sweeps left-right continuously (commanded servo angle =
+    SWEEP_AMP * sin(2*pi*t/T), a pure function of time since START). Every
+    range reading is tagged with the servo angle it was taken at, so
+    obstacles are located by ANGLE precisely (~ +-BIN/2) - the robot never
+    has to rotate to scan, and there is no sonar-cone fuzz.
+
+    Cycle ("go to the farthest gap, cross the obstacle, straighten up"):
+      SCAN        stand still; the servo sweep fills a polar range map
+      (DECIDE)    pick the candidate heading with the longest free run
+                  ("farthest"), planned with a margin so the leg CROSSES
+                  the obstacle
+      TURN        rotate the robot to that heading
+      DRIVE       drive the planned length, servo keeps sweeping; a fresh
+                  close reading inside the planned corridor cancels -> rescan
+      STRAIGHTEN  turn back to the goal heading (0)   ("make itself straight")
+      BACKUP      stuck (blocked): reverse a little, then rescan
+      FINAL       past the last obstacle row -> straight dash; the camera
+                  seeing the green finish line ends the run
+
+    Angles are relative to the start heading: 0 = straight ahead, + = left.
+    The arena end wall is NOT an obstacle (the finish line is in front of it).
+    """
+
+    # ---- arena geometry (progress measured from the START position) ----
+    WALL_P      = 2.725
+    WALL_TOL    = 0.15
+    WALL_STOP   = 0.12
+    BEAM_X      = 0.10    # beam pivot ahead of the axle (servo joint x)
+    FINAL_P     = 2.20
+    V_FINAL     = 0.12
+    # ---- servo sweep ----
+    SWEEP_AMP   = 1.05    # rad, left/right of straight ahead (joint limit 1.4)
+    SWEEP_T     = 3.6     # s, full sweep period (slow so the head tracks it)
+    MAX_RANGE   = 3.0
+    BIN         = 0.10    # angular resolution of the sweep map (rad)
+    SCAN_SETTLE = 0.15    # s standing still before the sweep is accepted
+    SCAN_DWELL  = 4.00    # s scan time (one full sweep + margin); then decide
+    # ---- planning ----
+    CLEAR_HALF   = 0.10   # corridor half-width the bot needs
+    STOP_MARGIN  = 0.14   # beam-to-obstacle distance where a leg ends
+    EDGE_PENALTY = 0.25   # large headings (sideways) cost more
+    BAD_TOL      = math.radians(12)   # a failed heading bans +/-12 deg
+    DRIVE_MAX    = 0.60
+    MIN_PROGRESS = 0.08
+    LANE_HALF    = 0.32
+    # ---- turning ----
+    K_TURN       = 2.0
+    TURN_W_MAX   = 1.0
+    TURN_W_MIN   = 0.25
+    ALIGN_TOL    = math.radians(3)
+    SETTLE       = 0.25
+    # ---- driving ----
+    V_FWD        = 0.15
+    K_HEAD       = 2.5
+    W_MAX        = 0.8
+    # ---- mid-drive safety veto (fresh sweep readings while driving) ----
+    VETO_HALF    = 0.28   # a reading within this angle of the heading ...
+    VETO_D       = 0.11   # ... closer than this cancels the leg -> rescan
+    VETO_T       = 0.40   # readings older than this are stale
+    # ---- backup ----
+    V_BACK       = -0.08
+    BACK_STEPS   = (0.10, 0.15, 0.20, 0.25)
+    # ---- timeouts (s) ----
+    T_TURN, T_DRIVE, T_BACK = 6.0, 10.0, 5.0
+    DEBUG        = False  # print map + decision each cycle
+
+    def __init__(self):
+        self.reset(0.0, 0.0, 0.0)
+
+    def reset(self, x0, y0, yaw0):
+        """x0, y0, yaw0 = odom pose at START (used for progress/lateral)."""
+        self.x0, self.y0, self.yaw0 = x0, y0, yaw0
+        self.state = None
+        self.after = 'SCAN'
+        self.blocked = 0
+        self.bad = []
+        self.acc = {}          # bin index -> shortest range seen this scan
+        self.recent = []       # fresh (t, angle-vs-heading, range) for the veto
+        self.pts = []
+        self.target = 0.0
+        self.length = 0.0
+        self.t_state = 0.0
+        self.ok_since = None
+        self.sx = self.sy = 0.0
+        self.x, self.y, self.rel = x0, y0, 0.0
+
+    # ---- servo command (pure function of t since START) ----
+    def servo_cmd(self, t):
+        if self.state == 'FINAL':
+            return 0.0                       # head straight ahead for the dash
+        return self.SWEEP_AMP * math.sin(2.0 * math.pi * t / self.SWEEP_T)
+
+    # ---- one TOF reading (called by the controller per range msg) ----
+    def tof(self, a, d, t):
+        """a = servo angle vs the HEADING (rad, + left), d = range (m), t = s."""
+        if not math.isfinite(d) or d <= 0.0:
+            return
+        d = min(d, self.MAX_RANGE)
+        b = int(round(a / self.BIN))
+        cur = self.acc.get(b)
+        self.acc[b] = min(cur, d) if cur is not None else d
+        self.recent.append((t, a, d))
+        cutoff = t - self.VETO_T
+        while self.recent and self.recent[0][0] < cutoff:
+            self.recent.pop(0)
+
+    def _center(self, t):
+        """Closest reading inside ~+-0.2 rad among the last 0.3 s of samples."""
+        best = self.MAX_RANGE
+        for ts, a, d in self.recent:
+            if t - ts > 0.30:
+                continue
+            if abs(a) < 0.2 and d < best:
+                best = d
+        return best
+
+    # ---- pose helpers (odom frame) ----
+    def progress(self, x, y):
+        return (x - self.x0) * math.cos(self.yaw0) + (y - self.y0) * math.sin(self.yaw0)
+
+    def lateral(self, x, y):
+        return -(x - self.x0) * math.sin(self.yaw0) + (y - self.y0) * math.cos(self.yaw0)
+
+    def _enter(self, state, t):
+        self.state = state
+        self.t_state = t
+        self.ok_since = None
+        self.sx, self.sy = self.x, self.y
+        if state == 'SCAN':
+            self.acc = {}
+
+    def _turn_to(self, target, t):
+        err = wrap(target - self.rel)
+        if abs(err) < self.ALIGN_TOL:
+            if self.ok_since is None:
+                self.ok_since = t
+            return 0.0, (t - self.ok_since) >= self.SETTLE
+        self.ok_since = None
+        w = clamp(self.K_TURN * err, -self.TURN_W_MAX, self.TURN_W_MAX)
+        if abs(w) < self.TURN_W_MIN:
+            w = math.copysign(self.TURN_W_MIN, w)
+        return w, False
+
+    # ---- wall filter (the end wall is not an obstacle) ----
+    def _is_wall(self, d, bearing):
+        c = math.cos(bearing)
+        if c < 0.3:
+            return False
+        p_b = self.progress(self.x, self.y) + self.BEAM_X * math.cos(self.rel)
+        expected = (self.WALL_P - p_b) / c
+        return d >= expected - self.WALL_TOL
+
+    def _build_points(self):
+        pts = []
+        for b, d in sorted(self.acc.items()):
+            a = b * self.BIN
+            if self._is_wall(d, wrap(self.rel + a)):
+                continue
+            pts.append((a, d))
+        return pts
+
+    def _free_length(self, th):
+        clear = self.CLEAR_HALF
+        length = self.DRIVE_MAX
+        for a, d in self.pts:
+            dth = a - th
+            along = d * math.cos(dth)
+            side = abs(d * math.sin(dth))
+            if along > 0.0 and side < clear:
+                length = min(length, along - self.STOP_MARGIN)
+        return length
+
+    def _veto(self, t):
+        """True if a fresh front-sector reading is dangerously close."""
+        for ts, a, d in self.recent:
+            if t - ts > self.VETO_T:
+                continue
+            if abs(a) <= self.VETO_HALF and d < self.VETO_D:
+                return True
+        return False
+
+    # ---- main entry ----
+    def step(self, fl=None, fc=None, fr=None, l=None, r=None, x=None, y=None,
+             rel=None, t=None):
+        self.x, self.y, self.rel = x, y, rel
+        if self.state is None:
+            self._enter('SCAN', t)
+        if self.state != 'FINAL' and self.progress(x, y) >= self.FINAL_P:
+            self._enter('FINAL', t)
+            print('[nav] final stretch: driving straight to the finish line', flush=True)
+        s = self.state
+        elapsed = t - self.t_state
+
+        if s == 'FINAL':
+            err = wrap(0.0 - rel)
+            if self._center(t) < 0.06:
+                return 0.0, 0.0
+            if abs(err) > math.radians(10):
+                w = clamp(self.K_TURN * err, -self.TURN_W_MAX, self.TURN_W_MAX)
+                if abs(w) < self.TURN_W_MIN:
+                    w = math.copysign(self.TURN_W_MIN, w)
+                return 0.0, w
+            return self.V_FINAL, clamp(self.K_HEAD * err, -self.W_MAX, self.W_MAX)
+
+        if s == 'SCAN':
+            if elapsed < self.SCAN_SETTLE:
+                return 0.0, 0.0
+            if elapsed < self.SCAN_DWELL:
+                return 0.0, 0.0
+            return self._decide(t)
+
+        if s == 'TURN':
+            w, done = self._turn_to(self.target, t)
+            if done or elapsed > self.T_TURN:
+                self._enter('DRIVE', t)
+                return 0.0, 0.0
+            return 0.0, w
+
+        if s == 'DRIVE':
+            moved = math.hypot(x - self.sx, y - self.sy)
+            if self._veto(t):
+                if moved >= 0.05:
+                    self.blocked = 0
+                    self.bad = []
+                else:
+                    self.bad.append(self.target)
+                    print('[nav] drive to %.0f deg cancelled: too close ahead'
+                          % math.degrees(self.target), flush=True)
+                self.after = 'SCAN'
+                self._enter('STRAIGHTEN', t)
+                return 0.0, 0.0
+            if moved >= self.length or elapsed > self.T_DRIVE:
+                if moved >= 0.05:
+                    self.blocked = 0
+                    self.bad = []
+                else:
+                    self.bad.append(self.target)
+                    print('[nav] drive to %.0f deg stalled at %.2f m'
+                          % (math.degrees(self.target), moved), flush=True)
+                self.after = 'SCAN'
+                self._enter('STRAIGHTEN', t)
+                return 0.0, 0.0
+            err = wrap(self.target - rel)
+            v = self.V_FWD * (1.0 - min(1.0, abs(err) / 0.5))
+            return v, clamp(self.K_HEAD * err, -self.W_MAX, self.W_MAX)
+
+        if s == 'STRAIGHTEN':
+            w, done = self._turn_to(0.0, t)
+            if done or elapsed > self.T_TURN:
+                self._enter(self.after, t)
+                return 0.0, 0.0
+            return 0.0, w
+
+        if s == 'BACKUP':
+            moved = math.hypot(x - self.sx, y - self.sy)
+            if moved >= self.length or elapsed > self.T_BACK:
+                self.bad = []
+                self._enter('SCAN', t)
+                return 0.0, 0.0
+            return self.V_BACK, clamp(self.K_HEAD * wrap(0.0 - rel), -self.W_MAX, self.W_MAX)
+
+        return 0.0, 0.0
+
+    # ---- polar sweep map -> choose the farthest usable heading ----
+    def _decide(self, t):
+        self.pts = self._build_points()
+        lat = self.lateral(self.x, self.y)
+        p_b = self.progress(self.x, self.y) + self.BEAM_X * math.cos(self.rel)
+        best, best_score, best_len = None, 0.0, 0.0
+        n_cand = int(round(self.SWEEP_AMP / 0.1))   # candidates every 0.1 rad
+        for i in range(-n_cand, n_cand + 1):
+            th = i * 0.1                            # heading-frame candidate
+            a = wrap(self.rel + th)                 # same heading, start-frame
+            if any(abs(wrap(a - bb)) < self.BAD_TOL for bb in self.bad):
+                continue
+            ca, sa = math.cos(a), math.sin(a)
+            length = self._free_length(th)
+            if ca > 0.2:
+                length = min(length, (self.WALL_P - self.WALL_STOP - p_b) / ca)
+            if sa > 1e-3:
+                length = min(length, (self.LANE_HALF - lat) / sa)
+            elif sa < -1e-3:
+                length = min(length, (-self.LANE_HALF - lat) / sa)
+            gain = length * ca
+            if gain < self.MIN_PROGRESS:
+                continue
+            score = gain - self.EDGE_PENALTY * abs(a)
+            if best is None or score > best_score:
+                best, best_score, best_len = a, score, length
+
+        if best is None:
+            self.blocked += 1
+            self.after = 'BACKUP'
+            print('[nav] blocked (progress=%.2f lateral=%.2f, %d bins seen)'
+                  % (self.progress(self.x, self.y), lat, len(self.acc)), flush=True)
+            self._enter('STRAIGHTEN', t)
+            return 0.0, 0.0
+        self.target, self.length = best, best_len
+        if self.DEBUG:
+            print('[nav] map %s' % {i * self.BIN: round(d, 2)
+                                    for i, d in sorted(self.acc.items())}, flush=True)
+        print('[nav] farthest gap: heading %.0f deg, %.2f m free'
+              % (math.degrees(best), best_len), flush=True)
+        self._enter('TURN', t)
+        return 0.0, 0.0
+
+
 # ======================================================================
 # CHOOSE THE ALGORITHM HERE (change only this line, then colcon build):
-#   FirstApproach        -> scan-and-go
-#   Bug2Navigator        -> Bug2 (follow obstacle edge until back on the start line)
-#   WallFollowNavigator  -> wall following (leave as soon as the obstacle is passed)
+#   RadarNavigator       -> servo sweep + 1 TOF (CURRENT HARDWARE)
+#   FirstApproach        -> scan-and-go (needs the old sonars - reference only)
+#   Bug2Navigator        -> Bug2 + wall following (needs the old sonars)
+#   WallFollowNavigator  -> wall following (needs the old sonars)
 # ======================================================================
-Navigator = Bug2Navigator
+Navigator = RadarNavigator
